@@ -42,6 +42,7 @@ fun main() {
     println("无参方法-代理结果：${proxyInstance.getBanner()}")
     println("有参方法-代理结果：${proxyInstance.withParam("Greet from: ")}")
 
+    // 其实这里的匿名Handler完全可以直接使用上面的Handler
     val testServiceInstance = Proxy.newProxyInstance(TestService::class.java, object: InvocationHandler{
         override fun invoke(method: Method, vararg args: Any?): Any? {
             if(method.name == "printContent" && args.size == 1){
