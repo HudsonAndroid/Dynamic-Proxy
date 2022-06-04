@@ -1,23 +1,48 @@
 package com.hudson.dynamic_proxy
 
 import com.google.common.reflect.TypeToken
+import com.hudson.dynamic_proxy.compiler.compile
 import com.hudson.dynamic_proxy.handler.InvocationHandler
 import com.squareup.javapoet.*
 import java.io.File
 import java.lang.reflect.Method
 import java.lang.reflect.Type
+import java.net.URL
+import java.net.URLClassLoader
 import javax.lang.model.element.Modifier
 
 /**
  * Created by Hudson on 2022/6/4.
  */
 object Proxy {
+    /**
+     * 代理类文件的根路径（去除包名后的）
+     */
+    const val PKG_ROOT_PATH = "./app/src/main/kotlin/"
 
-    fun packageName(clazz: Class<*>) = clazz.`package`.name
+    /**
+     * 默认代码生成的class文件的位置
+     *
+     * 可以通过查看对应App.kt对应的位置找到确定的目录
+     *
+     * 仅在选择类加载方式为复制class文件到build目录时生效
+     */
+    const val BUILD_CLASS_ROOT = "./app/build/classes/kotlin/main/"
 
-    fun proxyFileName(clazz: Class<*>) = "${clazz.simpleName}Proxy"
+    /**
+     * 自定义ClassLoader情况下，搜寻class文件的根路径
+     *
+     * 注意跟文件系统相关，定位到工程根目录即可
+     *
+     * 仅在选择类加载方式为自定义ClassLoader加载时生效
+     */
+    const val CLASS_LOADER_FIND_ROOT = "F:/projects/Dynamic-Proxy/"
 
-    fun newProxyInstance(realSubjectClazz: Class<*>, handler: InvocationHandler){
+    private fun packageName(clazz: Class<*>) = clazz.`package`.name
+
+    private fun proxyFileName(clazz: Class<*>) = "${clazz.simpleName}Proxy"
+
+    fun newProxyInstance(realSubjectClazz: Class<*>, handler: InvocationHandler): Any {
         val typeBuilder = TypeSpec.classBuilder(proxyFileName(realSubjectClazz))
             .addModifiers(Modifier.PUBLIC)
             .addAnnotation(
@@ -90,8 +115,11 @@ object Proxy {
             packageName(realSubjectClazz),
             typeBuilder.build()
         ).build().apply {
-            writeTo(File(App.PKG_ROOT_PATH))
+            writeTo(File(PKG_ROOT_PATH))
         }
+
+        // 编译，加载，并实例化一个对象
+        return ProxyLoader().newProxyInstance(realSubjectClazz, handler)
     }
 
     private fun MethodSpec.Builder.addParameters(method: Method): MethodSpec.Builder {
@@ -181,5 +209,55 @@ object Proxy {
         }
 
         return this
+    }
+
+    class ProxyLoader {
+
+        fun newProxyInstance(clazz: Class<*>, handler: InvocationHandler): Any {
+            // 编译
+            compile(File(getProxyFilePath(clazz)))
+
+            // 加载，并创建实例
+            return loadProxyClass(clazz)
+                .getConstructor(InvocationHandler::class.java)
+                .newInstance(handler)
+        }
+
+        private fun loadProxyClass(clazz: Class<*>, copyToBuildDir: Boolean = true): Class<*> {
+            // 注意：当应用程序编译运行后，实际上会在app/build/classes目录中生成对应的class文件
+            // 而ClassLoader会在这里面查找并加载相关类
+            // 由于我们的生成类是经过我们编译生成的class文件，因此应用自身的ClassLoader是无法加载到我们
+            // 产出的class的。 有两种方案：
+            // 1.将class编译结果路径也放到build目录下
+            // 2.新建一个ClassLoader手动加载我们的class文件
+
+            // 方式一：将产生的class文件复制到build目录下
+            val packageName = packageName(clazz)
+            val proxyFileName = proxyFileName(clazz)
+            return if(copyToBuildDir){
+                val pkgPath = packageName.replace(".", "/")
+                File(getProxyFilePath(clazz).replace(".java", ".class")).copyTo(
+                    File("${BUILD_CLASS_ROOT}$pkgPath/$proxyFileName.class"),
+                    true
+                )
+                Class.forName(
+                    "$packageName.$proxyFileName",
+                    false, App::class.java.classLoader)
+            }else{
+                // 方式二：新建ClassLoader并设置搜索路径
+                val clazzLoadPath = "${CLASS_LOADER_FIND_ROOT}${PKG_ROOT_PATH}"
+                val classLoader = URLClassLoader(arrayOf(URL("file:/$clazzLoadPath")))
+                classLoader.loadClass("$packageName.$proxyFileName")
+            }
+        }
+
+        private fun getProxyFilePath(clazz: Class<*>): String {
+            val pathBuilder = StringBuilder(PKG_ROOT_PATH)
+                .append(packageName(clazz).replace(".", "/"))
+                .append("/")
+                .append(proxyFileName(clazz))
+                .append(".java")
+            return pathBuilder.toString()
+        }
     }
 }
