@@ -3,17 +3,11 @@
  */
 package com.hudson.dynamic_proxy
 
-import com.hudson.dynamic_proxy.compiler.compile
 import com.hudson.dynamic_proxy.handler.InvocationHandler
 import com.hudson.dynamic_proxy.real.ApiService
 import com.hudson.dynamic_proxy.real.RealApiService
-import java.io.File
+import com.hudson.dynamic_proxy.real.TestService
 import java.lang.reflect.Method
-import java.net.URL
-import java.net.URLClassLoader
-
-
-
 
 class App {
 
@@ -25,10 +19,19 @@ class App {
 }
 
 fun main() {
+    val realSubject = RealApiService()
     val handler = object : InvocationHandler {
         override fun invoke(method: Method, vararg args: Any?): Any? {
             if(method.name == "getBanner"){
-                return listOf("hello", "world")
+                // 对真实类的结果进一步处理
+                val sourceResult = method.invoke(realSubject) as List<String>
+                return mutableListOf("hello", "world").apply {
+                    addAll(sourceResult)
+                }
+            }
+            if(method.name == "withParam" && args[0] is String){
+                // 不考虑真实类的处理逻辑，直接使用自定义逻辑
+                return "${args[0]}hudson"
             }
             return null
         }
@@ -36,7 +39,19 @@ fun main() {
     val proxyInstance = Proxy.newProxyInstance(RealApiService::class.java, handler) as ApiService
 
 
-    println("代理返回结果${proxyInstance.getBanner()}")
+    println("无参方法-代理结果：${proxyInstance.getBanner()}")
+    println("有参方法-代理结果：${proxyInstance.withParam("Greet from: ")}")
+
+    val testServiceInstance = Proxy.newProxyInstance(TestService::class.java, object: InvocationHandler{
+        override fun invoke(method: Method, vararg args: Any?): Any? {
+            if(method.name == "printContent" && args.size == 1){
+                println("直接代理接口-代理结果：${args[0]}")
+            }
+            return null
+        }
+    }) as TestService
+
+    testServiceInstance.printContent("JavaPoet")
 }
 
 
