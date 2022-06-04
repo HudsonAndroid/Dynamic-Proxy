@@ -53,8 +53,15 @@ object Proxy {
                     .build()
             )
 
+        val interfaces = if(realSubjectClazz.isInterface){
+            // 如果本身就是接口类型 (暂未考虑接口本身继承自其他接口)
+            arrayOf(realSubjectClazz)
+        }else{
+            realSubjectClazz.interfaces
+        }
+
         // 逐个添加所实现的接口类型
-        realSubjectClazz.interfaces.forEach {
+        interfaces.forEach {
             typeBuilder.addSuperinterface(it)
         }
 
@@ -77,7 +84,7 @@ object Proxy {
         typeBuilder.addMethod(constructor)
 
         // 考虑到realSubject可能实现多个接口，因此遍历接口
-        realSubjectClazz.interfaces.forEach {
+        interfaces.forEach {
             // 找到所有的方法
             for(method in it.declaredMethods){
                 /**
