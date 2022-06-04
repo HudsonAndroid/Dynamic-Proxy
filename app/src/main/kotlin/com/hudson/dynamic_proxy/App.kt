@@ -4,9 +4,11 @@
 package com.hudson.dynamic_proxy
 
 import com.hudson.dynamic_proxy.compiler.compile
+import com.hudson.dynamic_proxy.handler.InvocationHandler
 import com.hudson.dynamic_proxy.real.ApiService
 import com.hudson.dynamic_proxy.real.RealApiService
 import java.io.File
+import java.lang.reflect.Method
 import java.net.URL
 import java.net.URLClassLoader
 
@@ -37,8 +39,13 @@ class App {
 }
 
 fun main() {
-    val realSubject = RealApiService()
-    Proxy.newProxyInstance(realSubject,  ApiService::class.java)
+    val handler = object : InvocationHandler {
+        override fun invoke(method: Method, vararg args: Any?): Any? {
+            println("调用$method")
+            return null
+        }
+    }
+    Proxy.newProxyInstance(RealApiService::class.java, handler)
 
     val clazz = RealApiService::class.java
 
@@ -71,11 +78,11 @@ fun main() {
     }
 
     val proxyInstance = loadClass()
-        .getConstructor(RealApiService::class.java)
-        .newInstance(realSubject) as ApiService
+        .getConstructor(InvocationHandler::class.java)
+        .newInstance(handler) as ApiService
 
 
-    println(proxyInstance.getBanner())
+    println("代理返回结果${proxyInstance.getBanner()}")
 }
 
 
