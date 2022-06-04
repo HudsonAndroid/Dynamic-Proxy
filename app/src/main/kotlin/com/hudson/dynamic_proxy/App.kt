@@ -3,13 +3,79 @@
  */
 package com.hudson.dynamic_proxy
 
+import com.hudson.dynamic_proxy.compiler.compile
+import com.hudson.dynamic_proxy.real.ApiService
+import com.hudson.dynamic_proxy.real.RealApiService
+import java.io.File
+import java.net.URL
+import java.net.URLClassLoader
+
+
+
+
 class App {
+
+    companion object{
+        const val PKG_ROOT_PATH = "./app/src/main/kotlin/"
+        const val BUILD_CLASS_ROOT = "./app/build/classes/kotlin/main/"
+
+        fun getProxyFilePath(clazz: Class<*>): String {
+            val pathBuilder = StringBuilder(PKG_ROOT_PATH)
+                .append(Proxy.packageName(clazz).replace(".", "/"))
+                .append("/")
+                .append(Proxy.proxyFileName(clazz))
+                .append(".java")
+            return pathBuilder.toString()
+        }
+    }
+
     val greeting: String
         get() {
             return "Hello World!"
         }
+
 }
 
 fun main() {
-    println(App().greeting)
+    val realSubject = RealApiService()
+    Proxy.newProxyInstance(realSubject,  ApiService::class.java)
+
+    val clazz = RealApiService::class.java
+
+    // 编译
+    compile(File(App.getProxyFilePath(clazz)))
+
+    // 加载
+    val loadClass = {
+        // 错误的加载方式：当应用程序编译运行后，时机上会在app/build/classes目录中生成对应的class文件
+        // 而ClassLoader会在这里面查找并加载相关类
+        // 由于我们的生成类是经过我们编译生成的class文件，因此应用自身的ClassLoader是无法加载到我们
+        // 产出的class的。 有两种方案：
+        // 1.将class编译结果路径也放到build目录下
+        // 2.新建一个ClassLoader手动加载我们的class文件
+
+        // 方式一：将产生的class文件复制到build目录下
+//        val pkgPath = Proxy.packageName(clazz).replace(".", "/")
+//        File(App.getProxyFilePath(clazz).replace(".java", ".class")).copyTo(
+//            File("${App.BUILD_CLASS_ROOT}$pkgPath/${Proxy.proxyFileName(clazz)}.class"),
+//            true
+//        )
+//        Class.forName(
+//            "${Proxy.packageName(clazz)}.${Proxy.proxyFileName(clazz)}",
+//            false, App::class.java.classLoader)
+
+        // 方式二：新建ClassLoader并设置搜索路径
+        val clazzLoadPath = "F:/projects/Dynamic-Proxy/${App.PKG_ROOT_PATH}"
+        val classLoader = URLClassLoader(arrayOf(URL("file:/$clazzLoadPath")))
+        classLoader.loadClass("${Proxy.packageName(clazz)}.${Proxy.proxyFileName(clazz)}")
+    }
+
+    val proxyInstance = loadClass()
+        .getConstructor(RealApiService::class.java)
+        .newInstance(realSubject) as ApiService
+
+
+    println(proxyInstance.getBanner())
 }
+
+
