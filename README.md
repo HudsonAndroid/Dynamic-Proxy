@@ -278,6 +278,11 @@
 
 注意：路径根据自身情况配置，与电脑设备磁盘相关
 
+
+自此类实例的创建过程完毕，整体过程：
+
+![代理类生成过程](resources/代理类生成过程.png)
+
 ### 3.3 支持任意类任意方法
 #### 1）支持任意类
 支持任意类，上面逻辑中已经实现，只需要我们提供接口的class和一个真实类（实现类）即可。
@@ -440,17 +445,230 @@
 	Process finished with exit code 0
 	
 这样我们就实现了对任意类任意方法的代理了。
-### 基本使用
-动态代理的关键是，提供被代理类的ClassLoader和需要实现的接口（注意，动态代理只能完成接口中方法的代理），并提供自定义的逻辑（自定义的逻辑都是实现一个InvocationHandler类，并决定如何运行）
-### 原理
-原理基本和上面一致，只不过，动态代理本身为了适应所有情况，于是增加了外界被代理类的接口传入，这样在动态生成代码的时候，可以实现接口中的方法，方法的执行通过对应的方法名字获取到反射的Method，因此可以把所有方法的运行通过InvocationHandler接手，因此我们动态生成的类的所有方法的运行都会跑到自定义的InvocationHandler中。
 
-由于所有的逻辑都转交给了InvocationHandler，因此如果我们有被代理的对象，那么把被代理的对象传入我们自定义的InvocationHandler中，并在对应的统一方法入口中判断是否是对应的方法，然后决定执行即可。
+### 3.5 总结
+至此基本类图结构如下：
 
-##### 注意
-InvocationHandler的invoke方法中执行时一定要避免传入动态生成的代理类对象（即invoke方法的第一个参数），否则按照上面理论将是自己代理自己，会死循环，因为外界使用者是使用这个动态生成的类对象执行对应方法的，如果我们转交过来之后继续使用动态生成的类调用这个方法的话，由于动态生成类的该方法内部逻辑就是把逻辑转交给InvocationHandler，所以这样就会重新回调回动态生成类这边来，形成死循环。
+![自定义动态代理类图](resources/自定义动态代理类图.png)
 
-我们容易搞混的原因是没有理解清楚关系，记住是我们动态生成的类对象是被使用者调用的，然后调用的逻辑全部转交给了InvocationHandler，而动态代理的Proxy.newProxyInstance（）从名字来看就是生成代理类，代理类就是动态生成的类。
+## 4.系统提供的动态代理分析
+我们来分析官方提供的动态代理。
+
+	  public static Object newProxyInstance(ClassLoader loader,
+                                          Class<?>[] interfaces,
+                                          InvocationHandler h)
+
+有三个参数：
+
+第一个ClassLoader，
+
+第二个传递一个Class数组，我们是直接通过外界传入的Service的class拿到了interfaces，然后逐个遍历内部的方法的。
+
+第三个参数与我们的InvocationHandler类似。但是InvocationHandler的invoke方法相比我们自定义的InvocatinoHandler中的多了一个参数Proxy。
+
+	public @Nullable Object invoke(Object proxy, Method method, @Nullable Object[] args)
+
+那么第一个参数proxy的作用何在？proxy就是代理类，也就是我们的InvocationHandler。  该参数存在的意义在于对于那种需要返回this的方法情况，例如链式调用中使用。
+
+**注意：InvocationHandler的invoke方法中执行时一定要避免使用第一个参数运行method，否则结果就是自己调用自己，形成死循环。**
+
+### 4.1 分析系统源码
+
+	 @CallerSensitive
+    public static Object newProxyInstance(ClassLoader loader,
+                                          Class<?>[] interfaces,
+                                          InvocationHandler h)
+        throws IllegalArgumentException
+    {
+        
+        /*
+		 * 1.查找或创建Proxy类
+         * Look up or generate the designated proxy class.
+         */
+        Class<?> cl = getProxyClass0(loader, intfs);
+
+        /*
+         * 2.调用其构造方法创建实例
+         * Invoke its constructor with the designated invocation handler.
+         */
+        try {
+            // Android-removed: SecurityManager / permission checks.
+            /*
+            if (sm != null) {
+                checkNewProxyPermission(Reflection.getCallerClass(), cl);
+            }
+            */
+
+            final Constructor<?> cons = cl.getConstructor(constructorParams);
+            final InvocationHandler ih = h;
+            if (!Modifier.isPublic(cl.getModifiers())) {
+                // BEGIN Android-removed: Excluded AccessController.doPrivileged call.
+                /*
+                AccessController.doPrivileged(new PrivilegedAction<Void>() {
+                    public Void run() {
+                        cons.setAccessible(true);
+                        return null;
+                    }
+                });
+                */
+
+                cons.setAccessible(true);
+                // END Android-removed: Excluded AccessController.doPrivileged call.
+            }
+            return cons.newInstance(new Object[]{h});
+        } catch (IllegalAccessException|InstantiationException e) {
+            throw new InternalError(e.toString(), e);
+        } catch (InvocationTargetException e) {
+            Throwable t = e.getCause();
+            if (t instanceof RuntimeException) {
+                throw (RuntimeException) t;
+            } else {
+                throw new InternalError(t.toString(), t);
+            }
+        } catch (NoSuchMethodException e) {
+            throw new InternalError(e.toString(), e);
+        }
+    }
+
+可以看出系统提供的逻辑跟我们差不多，首先要编译加载类信息，然后根据类拿到构造方法创建实例。
+
+我们继续看加载类信息的逻辑
+
+	 private static Class<?> getProxyClass0(ClassLoader loader,
+                                           Class<?>... interfaces) {
+        if (interfaces.length > 65535) {
+            throw new IllegalArgumentException("interface limit exceeded");
+        }
+
+        // If the proxy class defined by the given loader implementing
+        // the given interfaces exists, this will simply return the cached copy;
+        // otherwise, it will create the proxy class via the ProxyClassFactory
+        return proxyClassCache.get(loader, interfaces);
+    }
+
+可以看出系统动态代理提供了一个缓存，用于缓存已经加载的代理类信息。
+
+我们看proxyClassCache字段
+	
+	    private static final WeakCache<ClassLoader, Class<?>[], Class<?>>
+        	proxyClassCache = new WeakCache<>(new KeyFactory(), new ProxyClassFactory());
+
+有一个ProxyClassFactory，从字面上可以看出这就是ProxyClass的构建工厂。
+
+	@Override
+        public Class<?> apply(ClassLoader loader, Class<?>[] interfaces) {
+
+            Map<Class<?>, Boolean> interfaceSet = new IdentityHashMap<>(interfaces.length);
+            for (Class<?> intf : interfaces) {
+                /*
+                 * Verify that the class loader resolves the name of this
+                 * interface to the same Class object.
+                 */
+                Class<?> interfaceClass = null;
+                try {
+                    interfaceClass = Class.forName(intf.getName(), false, loader);
+                } catch (ClassNotFoundException e) {
+                }
+                if (interfaceClass != intf) {
+                    throw new IllegalArgumentException(
+                        intf + " is not visible from class loader");
+                }
+                /*
+                 * Verify that the Class object actually represents an
+                 * interface.
+                 */
+                if (!interfaceClass.isInterface()) {
+                    throw new IllegalArgumentException(
+                        interfaceClass.getName() + " is not an interface");
+                }
+                /*
+                 * Verify that this interface is not a duplicate.
+                 */
+                if (interfaceSet.put(interfaceClass, Boolean.TRUE) != null) {
+                    throw new IllegalArgumentException(
+                        "repeated interface: " + interfaceClass.getName());
+                }
+            }
+
+            String proxyPkg = null;     // package to define proxy class in
+            int accessFlags = Modifier.PUBLIC | Modifier.FINAL;
+
+            /*
+             * Record the package of a non-public proxy interface so that the
+             * proxy class will be defined in the same package.  Verify that
+             * all non-public proxy interfaces are in the same package.
+             */
+            for (Class<?> intf : interfaces) {
+                int flags = intf.getModifiers();
+                if (!Modifier.isPublic(flags)) {
+                    accessFlags = Modifier.FINAL;
+                    String name = intf.getName();
+                    int n = name.lastIndexOf('.');
+                    String pkg = ((n == -1) ? "" : name.substring(0, n + 1));
+                    if (proxyPkg == null) {
+                        proxyPkg = pkg;
+                    } else if (!pkg.equals(proxyPkg)) {
+                        throw new IllegalArgumentException(
+                            "non-public interfaces from different packages");
+                    }
+                }
+            }
+
+            if (proxyPkg == null) {
+                // if no non-public proxy interfaces, use the default package.
+                proxyPkg = "";
+            }
+
+            {
+                // Android-changed: Generate the proxy directly instead of calling
+                // through to ProxyGenerator.
+                List<Method> methods = getMethods(interfaces);
+                Collections.sort(methods, ORDER_BY_SIGNATURE_AND_SUBTYPE);
+                validateReturnTypes(methods);
+                List<Class<?>[]> exceptions = deduplicateAndGetExceptions(methods);
+
+                Method[] methodsArray = methods.toArray(new Method[methods.size()]);
+                Class<?>[][] exceptionsArray = exceptions.toArray(new Class<?>[exceptions.size()][]);
+
+                /*
+                 * Choose a name for the proxy class to generate.
+                 */
+                long num = nextUniqueNumber.getAndIncrement();
+                String proxyName = proxyPkg + proxyClassNamePrefix + num;
+
+                return generateProxy(proxyName, interfaces, loader, methodsArray,
+                                     exceptionsArray);
+            }
+        }
+    }
+
+    @FastNative
+    private static native Class<?> generateProxy(String name, Class<?>[] interfaces,
+                                                 ClassLoader loader, Method[] methods,
+                                                 Class<?>[][] exceptions);
+
+可以看到最后部分generateProxy方法，创建代理类的地方。
+
+可以看出创建代理类的逻辑是native方法完成的。
+
+
+### 4.2 动态代理与AOP
+我们在不修改原来代码的情况下，给原来的类的方法上插入了自定义的逻辑。
+
+这点非常像字节码插桩的操作，即对生成的class文件进行修改，而不会影响到实际的原始代码，对上层用户无感知。
+
+这就是AOP编程模型（面向切面编程）。
+
+相当于传统的编程模型，AOP的思考点是：找到匹配的切入点，插入自定义逻辑，而且这种插入对原有框架代码是无侵入性的。相对于面向对象编程模型使用继承的方式进行扩展这种侵入性的处理方式，显然是一个巨大的进步。
+
+## 5.十万个为什么
+### 5.1 为什么JDK动态代理只能基于接口实现？
+因为JDK动态代理生成的类默认要继承自Proxy类，由于不支持多继承，因此只能基于接口。 这点我们也可以从JDK的Proxy类的说明看到
+
+	Proxy provides static methods for creating dynamic proxy
+	  classes and instances, and it is also the superclass of all
+	  dynamic proxy classes created by those methods.
 
 ## 参考
 1. [10分钟看懂动态代理设计模式](https://www.jianshu.com/p/fc285d669bc5)
+2. [10分钟看懂动态代理设计模式（升级篇）](http://youngfeng.com/2019/11/29/10%E5%88%86%E9%92%9F%E7%9C%8B%E6%87%82%E5%8A%A8%E6%80%81%E4%BB%A3%E7%90%86%E8%AE%BE%E8%AE%A1%E6%A8%A1%E5%BC%8F%EF%BC%88%E5%8D%87%E7%BA%A7%E7%AF%87%EF%BC%89/)
