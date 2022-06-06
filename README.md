@@ -553,7 +553,7 @@
 	    private static final WeakCache<ClassLoader, Class<?>[], Class<?>>
         	proxyClassCache = new WeakCache<>(new KeyFactory(), new ProxyClassFactory());
 
-有一个ProxyClassFactory，从字面上可以看出这就是ProxyClass的构建工厂。
+有一个ProxyClassFactory，从字面上可以看出这就是ProxyClass的构建工厂。  如果知晓缓存一般的设计思路的同学应该都知道，设计缓存都是先从缓存中获取，获取不到新建，很明显，ProxyClassFactory就是新建代理类的工厂。
 
 	@Override
         public Class<?> apply(ClassLoader loader, Class<?>[] interfaces) {
@@ -649,8 +649,7 @@
 
 可以看到最后部分generateProxy方法，创建代理类的地方。
 
-可以看出创建代理类的逻辑是native方法完成的。
-
+可以看出创建代理类的逻辑是native方法完成的（注意：这里看的是android中带的Proxy类，原始JDK中是借助了ProxyGenerator实现的）。
 
 ### 4.2 动态代理与AOP
 我们在不修改原来代码的情况下，给原来的类的方法上插入了自定义的逻辑。
